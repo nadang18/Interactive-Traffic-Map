@@ -2,9 +2,6 @@ import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm';
 // Import Mapbox as an ESM module
 import mapboxgl from 'https://cdn.jsdelivr.net/npm/mapbox-gl@2.15.0/+esm';
 
-
-
-
 // Check that Mapbox GL JS is loaded
 //console.log("Mapbox GL JS Loaded:", mapboxgl);
 
@@ -28,9 +25,62 @@ function getCoords(station) {
   return { cx: x, cy: y };  // Return as object for use in SVG attributes
 }
 
+// Helper function to format time
+function formatTime(minutes) {
+  const date = new Date(0, 0, 0, 0, minutes);  // Set hours & minutes
+  return date.toLocaleString('en-US', { timeStyle: 'short' }); // Format as HH:MM AM/PM
+}
+
+// Helper function to compute station traffic
+function computeStationTraffic(stations, trips) {
+  // Compute departures
+  const departures = d3.rollup(
+    trips, 
+    (v) => v.length, 
+    (d) => d.start_station_id
+  );
+
+  // Compute arrivals
+  const arrivals = d3.rollup(
+    trips, 
+    (v) => v.length, 
+    (d) => d.end_station_id
+  );
+
+  // Update each station with the calculated values
+  return stations.map((station) => {
+    let id = station.short_name;
+    station.arrivals = arrivals.get(id) ?? 0;
+    station.departures = departures.get(id) ?? 0;
+    station.totalTraffic = station.arrivals + station.departures;
+    return station;
+  });
+}
+
+// Helper function to convert date to minutes since midnight
+function minutesSinceMidnight(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+// Helper function to filter trips by time
+function filterTripsByTime(trips, timeFilter) {
+  return timeFilter === -1 
+    ? trips // If no filter is applied (-1), return all trips
+    : trips.filter((trip) => {
+        // Convert trip start and end times to minutes since midnight
+        const startedMinutes = minutesSinceMidnight(trip.started_at);
+        const endedMinutes = minutesSinceMidnight(trip.ended_at);
+        
+        // Include trips that started or ended within 60 minutes of the selected time
+        return (
+          Math.abs(startedMinutes - timeFilter) <= 60 ||
+          Math.abs(endedMinutes - timeFilter) <= 60
+        );
+    });
+}
+
 // Wait for the map to load before adding data
 map.on('load', async () => {
-
   // Add the Boston bike lanes data source
   map.addSource('boston_route', {
     type: 'geojson',
@@ -67,7 +117,7 @@ map.on('load', async () => {
     }
   });
 
-  // Fetch and parse the CSV data
+  // Fetch and parse the station data
   let jsonData;
   try {
     const jsonurl = 'https://dsc106.com/labs/lab07/data/bluebikes-stations.json'; // Replace with the actual URL
@@ -79,32 +129,18 @@ map.on('load', async () => {
     console.log('Stations Array:', stations);
 
     // Fetch and parse the traffic data
-    const trafficUrl = 'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv';
-    const trips = await d3.csv(trafficUrl);
+    let trips = await d3.csv(
+      'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv',
+      (trip) => {
+        trip.started_at = new Date(trip.started_at);
+        trip.ended_at = new Date(trip.ended_at);
+        return trip;
+      },
+    );
     console.log('Loaded Traffic Data:', trips);
 
-    // Calculate departures and arrivals
-    const departures = d3.rollup(
-      trips,
-      (v) => v.length,
-      (d) => d.start_station_id,
-    );
-
-    const arrivals = d3.rollup(
-      trips,
-      (v) => v.length,
-      (d) => d.end_station_id,
-    );
-
-    // Add arrivals, departures, totalTraffic properties to each station
-    stations = stations.map((station) => {
-      let id = station.short_name;
-      station.arrivals = arrivals.get(id) ?? 0;
-      station.departures = departures.get(id) ?? 0;
-      station.totalTraffic = station.arrivals + station.departures;
-      return station;
-    });
-
+    // Compute initial station traffic
+    stations = computeStationTraffic(stations, trips);
     console.log('Updated Stations Array:', stations);
 
     // Select the SVG element inside the map container
@@ -118,7 +154,7 @@ map.on('load', async () => {
 
     // Append circles to the SVG for each station
     const circles = svg.selectAll('circle')
-      .data(stations)
+      .data(stations, (d) => d.short_name)  // Use station short_name as the key
       .enter()
       .append('circle')
       .attr('r', d => radiusScale(d.totalTraffic)) // Radius based on traffic
@@ -150,11 +186,51 @@ map.on('load', async () => {
     map.on('resize', updatePositions);   // Update on window resize
     map.on('moveend', updatePositions);  // Final adjustment after movement ends
 
+    // Function to update the scatterplot based on the time filter
+    function updateScatterPlot(timeFilter) {
+      // Get only the trips that match the selected time filter
+      const filteredTrips = filterTripsByTime(trips, timeFilter);
+      
+      // Recompute station traffic based on the filtered trips
+      const filteredStations = computeStationTraffic(stations, filteredTrips);
+      
+      // Adjust the radius scale range based on the time filter
+      timeFilter === -1 ? radiusScale.range([0, 25]) : radiusScale.range([3, 50]);
+
+      // Update the scatterplot by adjusting the radius of circles
+      circles
+        .data(filteredStations, (d) => d.short_name)  // Ensure D3 tracks elements correctly
+        .join('circle')
+        .attr('r', (d) => radiusScale(d.totalTraffic)); // Update circle sizes
+    }
+
+    // Handle the time filter slider
+    const timeSlider = document.getElementById('time-slider');
+    const selectedTime = document.getElementById('selected-time');
+    const anyTimeLabel = document.getElementById('any-time');
+
+    // Function to update the time display
+    function updateTimeDisplay() {
+      const timeFilter = Number(timeSlider.value);  // Get slider value
+
+      if (timeFilter === -1) {
+        selectedTime.textContent = '';  // Clear time display
+        anyTimeLabel.style.display = 'block';  // Show "(any time)"
+      } else {
+        selectedTime.textContent = formatTime(timeFilter);  // Display formatted time
+        anyTimeLabel.style.display = 'none';  // Hide "(any time)"
+      }
+
+      // Call updateScatterPlot to reflect the changes on the map
+      updateScatterPlot(timeFilter);
+    }
+
+    // Bind the slider's input event to the updateTimeDisplay function
+    timeSlider.addEventListener('input', updateTimeDisplay);
+    updateTimeDisplay();
+
   } catch (error) {
     console.error('Error loading JSON:', error); // Handle errors
   }
-
-
-  
 });
 
