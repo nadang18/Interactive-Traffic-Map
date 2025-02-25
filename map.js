@@ -152,6 +152,9 @@ map.on('load', async () => {
       .domain([0, d3.max(stations, (d) => d.totalTraffic)])
       .range([0, 25]);
 
+    // Create a quantize scale for traffic flow
+    const stationFlow = d3.scaleQuantize().domain([0, 1]).range([0, 0.5, 1]);
+
     // Append circles to the SVG for each station
     const circles = svg.selectAll('circle')
       .data(stations, (d) => d.short_name)  // Use station short_name as the key
@@ -163,6 +166,7 @@ map.on('load', async () => {
       .attr('stroke-width', 1)    // Circle border thickness
       .attr('opacity', 0.6)       // Circle opacity
       .attr('pointer-events', 'auto') // Enable pointer events for tooltips
+      .style('--departure-ratio', d => stationFlow(d.departures / d.totalTraffic)) // Set departure ratio
       .each(function(d) {
         // Add <title> for browser tooltips
         d3.select(this)
@@ -201,7 +205,8 @@ map.on('load', async () => {
       circles
         .data(filteredStations, (d) => d.short_name)  // Ensure D3 tracks elements correctly
         .join('circle')
-        .attr('r', (d) => radiusScale(d.totalTraffic)); // Update circle sizes
+        .attr('r', (d) => radiusScale(d.totalTraffic)) // Update circle sizes
+        .style('--departure-ratio', (d) => stationFlow(d.departures / d.totalTraffic)); // Update departure ratio
     }
 
     // Handle the time filter slider

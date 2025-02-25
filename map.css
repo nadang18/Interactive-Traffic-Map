@@ -24,7 +24,33 @@ html, body {
 }
 
 #map svg circle {
-  fill-opacity: 0.6;
+  fill-opacity: 0.8;
   stroke: white;
   pointer-events: auto;
+  fill: var(--color);
+}
+
+.legend {
+  display: flex;
+  gap: 1px;
+  margin-block: 1em;
+}
+
+.legend > div {
+  flex: 1;
+  padding: 0.5em 2em;
+  text-align: center;
+  background-color: var(--color);
+  color: white;
+}
+
+#map svg circle,
+.legend > div {
+  --color-departures: steelblue;
+  --color-arrivals: darkorange;
+  --color: color-mix(
+    in oklch,
+    var(--color-departures) calc(100% * var(--departure-ratio)),
+    var(--color-arrivals)
+  );
 }
